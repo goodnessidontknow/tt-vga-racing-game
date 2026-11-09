@@ -35,48 +35,25 @@ module tt_um_goodnessidontknow_vga_racing_game (
     //    Change these freely. Nothing below needs editing when you do.
     // ========================================================================
 
-    // Colours. Six bits: two for red, two for green, two for blue (6'bRRGGBB).
-    // Each pair goes from 00 (off) to 11 (full), so 6'b110000 is pure red.
-    // localparam [5:0] CAR_COLOUR     = 6'b110000;   // red
-    // localparam [5:0] WINDOW_COLOUR  = 6'b001011;   // glass
-    // localparam [5:0] WHEEL_COLOUR   = 6'b010101;   // dark grey
-    // localparam [5:0] TRAFFIC_COLOUR = 6'b111000;   // amber
-    // localparam [5:0] TRAFFIC_SHADE  = 6'b100000;   // the darker strip along its top
-    // localparam [5:0] ROAD_COLOUR    = 6'b010101;   // tarmac
-    // localparam [5:0] LINE_COLOUR    = 6'b111110;   // the dashed centre line
-    // localparam [5:0] KERB_COLOUR_A  = 6'b110000;   // the kerb is striped red ...
-    // localparam [5:0] KERB_COLOUR_B  = 6'b111111;   // ... and white
-    // localparam [5:0] GRASS_COLOUR_A = 6'b001000;   // the two greens of the grass
-    // localparam [5:0] GRASS_COLOUR_B = 6'b000100;
-    // localparam [5:0] SCORE_COLOUR   = 6'b001100;   // green
-
-    //localparam [1:0] DETAIL_COLOUR  = 1'b0;   // details
-
     // Sizes, in pixels. The screen is 640 wide and 480 tall.
     localparam [9:0] GROUND_H  = 10'd10;
     localparam [9:0] GROUND_Y  = 10'd400;
     localparam [9:0] CAR_W     = 10'd24;
     localparam [9:0] CAR_H     = 10'd40;
-    localparam [9:0] TRAFFIC_W = 10'd32;   // keep to 48 or less, or it overhangs the kerb
+    localparam [9:0] CAR_X    = 10'd168;  // the part you can drive on
+    localparam [9:0] TRAFFIC_W = 10'd32;   // keep to 48 or less, or it overhangs the kerb, ALSO KEEP AT A POWER OF 2
     localparam [9:0] TRAFFIC_H = 10'd32;
-    // localparam       GRASS_BIT = 4;        // size of the grass squares: 3 is 8 pixels, 4 is 16, 5 is 32
+
+    localparam [9:0] TRAFFIC0_Y = GROUND_Y - TRAFFIC_H;
+    localparam [9:0] TRAFFIC1_Y = 10'd270;
 
     // Speeds, in pixels per frame. There are 60 frames every second.
-    // localparam [9:0] STEER_STEP  = 10'd4;  // how far the car moves sideways
     localparam [4:0] BASE_SPEED  = 5'd3;   // how fast the traffic comes at the start
-    // localparam [4:0] BOOST_SPEED = 5'd3;   // added while boost is held
-                                           // keep BASE_SPEED + BOOST_SPEED to 16 or less
 
     // How long the red flash lasts after a crash, in frames. 63 at most.
     localparam [5:0] CRASH_FRAMES = 6'd40;
 
-    // The road. These numbers fit together, so change them as a set.
-    // localparam [9:0] ROAD_L    = 10'd160;  // outer edge of the left kerb
-    // localparam [9:0] ROAD_R    = 10'd480;  // outer edge of the right kerb
-    localparam [9:0] LANE_L    = 10'd168;  // the part you can drive on
-    // localparam [9:0] LANE_R    = 10'd472;
-    localparam [9:0] CAR_Y_START     = GROUND_Y - CAR_H;  // how far down the screen the car sits
-    // localparam [9:0] CAR_START = 10'd304;  // where the car starts each run
+    localparam [9:0] CAR_Y_START = GROUND_Y - CAR_H;  // how far down the screen the car sits
 
     // ========================================================================
     // 2. WIRING
@@ -89,9 +66,12 @@ module tt_um_goodnessidontknow_vga_racing_game (
     wire [9:0] pix_x;          // the pixel being drawn now: 0 to 639 across
     wire [9:0] pix_y;          // and 0 to 479 down
 
+    reg rst_n_q;
+    always @(posedge clk) rst_n_q <= rst_n;
+
     hvsync_generator hvsync_gen (
         .clk(clk),
-        .reset(~rst_n),
+        .reset(~rst_n_q),
         .hsync(hsync),
         .vsync(vsync),
         .display_on(video_active),
@@ -101,10 +81,6 @@ module tt_um_goodnessidontknow_vga_racing_game (
 
     wire jump        = ui_in[0];
     wire duck        = ui_in[1];
-    // wire steer_left  = ui_in[3] & ~ui_in[4];
-    // wire steer_right = ui_in[4] & ~ui_in[3];
-    // wire boost       = ui_in[5];
-
     // High for one clock as each frame ends. The game moves on once per frame.
     reg  vsync_q;
     wire new_frame = vsync & ~vsync_q;
@@ -114,36 +90,26 @@ module tt_um_goodnessidontknow_vga_racing_game (
     //    A few registers hold where everything is. They change once per frame.
     // ========================================================================
 
-    reg [9:0] car_x;               // left edge of the car
     reg [9:0] car_y;               // left edge of the car
     reg [9:0] traffic0_x;          // top left corner of each of the two vehicles
-    reg [9:0] traffic0_y;
     reg [9:0] traffic1_x;
-    reg [9:0] traffic1_y;
     reg [9:0] score;               // frames survived this run, up to 1023
-    //reg [9:0] scroll;              // how far the road has moved, for the stripes
     reg [5:0] crash_timer;         // frames of flash left after a crash, 0 when driving
-    reg [15:0] random;             // shifts every clock, so its value looks random
+    reg [7:0] random;             // shifts every clock, so its value looks random
     reg [9:0] jump_speed;
     reg jumping;
 
     // The level goes up by one every 64 frames, and each level is one pixel faster.
     wire [3:0] level = score[9:6];
-    wire [4:0] speed = BASE_SPEED + {1'b0, level};// + (boost ? BOOST_SPEED : 5'd0);
-
-    // The furthest left and right the car can go and still be on the road.
-    localparam [9:0] CAR_MIN = LANE_L;
-    // localparam [9:0] CAR_MAX = LANE_R - CAR_W;
+    wire [4:0] speed = BASE_SPEED + {1'b0, level};
 
     // Where a vehicle joins the road: somewhere across the lane, 256 places.
-    // wire [9:0] random_x0 = LANE_L + {2'b00, random[7:0]};
-    wire [9:0] random_x1 = LANE_L + {2'b00, random[15:8]};
+    wire [9:0] random_x0 = {3'b101, random[6:0]};
+    wire [9:0] random_x1 = {3'b101, random[7:1]};
 
     // A crash is the car's rectangle overlapping a vehicle's rectangle.
-    wire hit0 = (car_x < traffic0_x + TRAFFIC_W) & (traffic0_x < car_x + CAR_W) &
-                (car_y < traffic0_y + TRAFFIC_H) & (traffic0_y < car_y + CAR_H);
-    wire hit1 = (car_x < traffic1_x + TRAFFIC_W) & (traffic1_x < car_x + CAR_W) &
-                (car_y < traffic1_y + TRAFFIC_H) & (traffic1_y < car_y + CAR_H);
+    wire hit0 = (traffic0_x > CAR_X - TRAFFIC_W) & (traffic0_x < CAR_X + CAR_W) & (car_y < TRAFFIC0_Y + TRAFFIC_H) & (car_y > TRAFFIC0_Y - CAR_H);
+    wire hit1 = (traffic1_x > CAR_X - TRAFFIC_W) & (traffic1_x < CAR_X + CAR_W) & (car_y < TRAFFIC1_Y + TRAFFIC_H) & (car_y > TRAFFIC1_Y - CAR_H);
     wire crash = hit0 | hit1;
 
     // How far each vehicle moves this frame. The second is one pixel faster,
@@ -151,41 +117,31 @@ module tt_um_goodnessidontknow_vga_racing_game (
     wire [9:0] step0 = {5'd0, speed};
     wire [9:0] step1 = {5'd0, speed} + 10'd1;
 
-    always @(posedge clk) begin
-        random  <= {random[14:0], random[15] ^ random[13] ^ random[12] ^ random[10]};
-        vsync_q <= vsync;
+    // One subtraction per obstacle, bit 10 is 1 when the step is bigger when the obstacle passes x = 0
+    wire [10:0] next0 = {1'b0, traffic0_x} - {1'b0, step0};
+    wire [10:0] next1 = {1'b0, traffic1_x} - {1'b0, step1};
 
-        if (~rst_n) begin
-            car_x       <= CAR_MIN;
-            car_y       <= CAR_Y_START;
-            traffic0_x  <= 10'd640;
-            traffic0_y  <= GROUND_Y - TRAFFIC_H;
-            traffic1_x  <= 10'd360;
-            traffic1_y  <= 10'd270;
-            score       <= 10'd0;
-            //scroll      <= 10'd0;
-            crash_timer <= 6'd0;
-            random      <= 16'hACE1;
-            jumping <= 1'b0;
-            jump_speed <= 10'sd0;
+    always @(posedge clk) begin
+        vsync_q <= vsync;
+        if (~rst_n_q) begin
+            crash_timer <= 6'd1;
+            random      <= 8'hA5;
         end else if (new_frame) begin
+            random <= {random[6:0], random[7] ^ random[5] ^ random[4] ^ random[3]};
             if (crash_timer != 6'd0) begin
                 // ---- after a crash: count the flash down, then start again
                 crash_timer <= crash_timer - 6'd1;
                 if (crash_timer == 6'd1) begin
-                    car_x      <= CAR_MIN;
+                    car_y       <= CAR_Y_START;
                     traffic0_x <= 10'd640;
-                    traffic0_y <= GROUND_Y - TRAFFIC_H;
-                    traffic1_x <= random_x1;
-                    traffic1_y <= 10'd270;
+                    traffic1_x <= 10'd360;//random_x1;
                     score      <= 10'd0;
+                    jumping <= 1'b0;
+                    jump_speed <= 10'sd0;
                 end
             end else if (crash) begin
                 crash_timer <= CRASH_FRAMES;
             end else begin
-                // ---- steering: move sideways, and stop at the edge of the road
-                // if (steer_left)  car_x <= (car_x > CAR_MIN + STEER_STEP) ? car_x - STEER_STEP : CAR_MIN;
-                // if (steer_right) car_x <= (car_x < CAR_MAX - STEER_STEP) ? car_x + STEER_STEP : CAR_MAX;
                 if (jump & ~jumping) begin
                     jumping <= 1'b1;
                     jump_speed <= 10'sd20;
@@ -202,21 +158,11 @@ module tt_um_goodnessidontknow_vga_racing_game (
 
 
                 // ---- traffic: move down, and rejoin at the top in a new place
-                if (traffic0_x - step0 == 10'd0) begin
-                    traffic0_x <= 10'd640;
-                    traffic0_y <= GROUND_Y - TRAFFIC_H;//random_x0; // change random_x0
-                end else begin
-                    traffic0_x <= traffic0_x - step0;
-                end
-                if (traffic1_x - step1 == 10'd0) begin
-                    traffic1_x <= 10'd640;
-                    traffic1_y <= CAR_Y_START + 10'd100; // change random_x1
-                end else begin
-                    traffic1_x <= traffic1_x - step1;
-                end
+                if (next0[10])  traffic0_x <= random_x0;
+                else            traffic0_x <= next0[9:0];
+                if (next1[10])  traffic1_x <= random_x1;
+                else            traffic1_x <= next1[9:0];
 
-                // ---- the road moves with the traffic, and the score counts up
-                //scroll <= scroll + step0;
                 if (score != 10'h3ff) score <= score + 10'd1;
             end
         end
@@ -226,40 +172,20 @@ module tt_um_goodnessidontknow_vga_racing_game (
     // 4. DRAWING
     //    One question for each thing on screen: is this pixel inside it?
     // ========================================================================
-
-    // The road, its striped kerbs and its dashed centre line. Adding scroll to
-    // pix_y is what makes the stripes move down the screen.
-    // wire [9:0] moving_y = pix_y + scroll;
-    // wire in_road        = (pix_x >= ROAD_L) & (pix_x < ROAD_R);
-    // wire in_kerb        = in_road & ((pix_x < LANE_L) | (pix_x >= LANE_R));
-    // wire kerb_stripe    = moving_y[4];
-    // wire in_centre_line = (pix_x >= 10'd318) & (pix_x < 10'd322) & moving_y[5];
-    // wire grass_square   = pix_x[GRASS_BIT] ^ pix_y[GRASS_BIT];
     
     // the ground
     wire in_ground    = (pix_y >= GROUND_Y) & (pix_y < GROUND_Y + GROUND_H);
 
-    wire [9:0] car_right = car_x + CAR_W;
-    wire [9:0] car_bottom = car_y + CAR_H;
-
     // The car, with a window and four wheels.
-    wire in_car    = (pix_x >= car_x) & (pix_x < car_right) &
-                     (pix_y >= car_y) & (pix_y < car_bottom);
-    wire in_window = in_car &
-                     (pix_x >= car_x + 10'd4) & (pix_x < car_right - 10'd4) &
-                     (pix_y >= car_y + 10'd8) & (pix_y < car_y + 10'd18);
-    wire in_wheel  = in_car &
-                     ((pix_x < car_x + 10'd3) | (pix_x >= car_right - 10'd3)) &
-                     ((pix_y < car_y + 10'd10) | (pix_y >= car_bottom - 10'd10));
+    wire [9:0] cy = pix_y - car_y;
+    wire in_car    = (pix_x >= CAR_X) & (pix_x < (CAR_X + CAR_W)) & (cy < CAR_H);
 
     // The two vehicles, each with a darker strip six pixels deep along the top.
-    wire in_traffic0 = (pix_x >= traffic0_x) & (pix_x < traffic0_x + TRAFFIC_W) &
-                       (pix_y >= traffic0_y) & (pix_y < traffic0_y + TRAFFIC_H);
-    wire in_traffic1 = (pix_x >= traffic1_x) & (pix_x < traffic1_x + TRAFFIC_W) &
-                       (pix_y >= traffic1_y) & (pix_y < traffic1_y + TRAFFIC_H);
+    wire [9:0] x0 = pix_x - traffic0_x; // TRAFFIC_W is a power of two, the same test can be done with a subtraction
+    wire [9:0] x1 = pix_x - traffic1_x;
+    wire in_traffic0 = (x0 < TRAFFIC_W) & (pix_y >= TRAFFIC0_Y) & (pix_y < TRAFFIC0_Y + TRAFFIC_H);
+    wire in_traffic1 = (x1 < TRAFFIC_W) & (pix_y >= TRAFFIC1_Y) & (pix_y < TRAFFIC1_Y + TRAFFIC_H);
     wire in_traffic  = in_traffic0 | in_traffic1;
-    // wire in_shade    = (in_traffic0 & (pix_y - traffic0_y < 10'd6)) |
-    //                    (in_traffic1 & (pix_y - traffic1_y < 10'd6));
 
     // The score bar: one pixel longer for every two frames survived.
     wire in_score = (pix_y >= 10'd8) & (pix_y < 10'd18) &
@@ -269,31 +195,10 @@ module tt_um_goodnessidontknow_vga_racing_game (
     // of anything lower down. Move a line to change what covers what.
     reg colour;//[5:0] colour;
     always @(*) begin
-        //if (~video_active)       colour = 6'b000000;
-        if (~video_active | in_score | in_wheel | in_window | in_car | in_traffic | in_ground) colour = 1'b0;
-        // else if (in_score)       colour = DETAIL_COLOUR;//SCORE_COLOUR;
-        // else if (in_wheel)       colour = DETAIL_COLOUR;//WHEEL_COLOUR;
-        // else if (in_window)      colour = DETAIL_COLOUR;//WINDOW_COLOUR;
-        // else if (in_car)         colour = DETAIL_COLOUR;//CAR_COLOUR;
-        // else if (in_traffic)     colour = DETAIL_COLOUR;//in_shade ? TRAFFIC_SHADE : TRAFFIC_COLOUR;
-        //else if (in_kerb)        colour = kerb_stripe ? KERB_COLOUR_A : KERB_COLOUR_B;
-        //else if (in_centre_line) colour = LINE_COLOUR;
-        //else if (in_road)        colour = ROAD_COLOUR;
-        //else if (in_ground)      colour = DETAIL_COLOUR;
-        //else                     colour = grass_square ? GRASS_COLOUR_A : GRASS_COLOUR_B;
+        if (~video_active | in_score | in_car | in_traffic | in_ground) colour = 1'b0;
         else                     colour = 1'b1;
     end
 
-    // The crash flash: for four frames in every eight, full red with green and blue halved.
-    //wire       flash  = (crash_timer != 6'd0) & crash_timer[2];
-    //wire [5:0] shown  = flash ? {2'b11, colour[3:2] >> 1, colour[1:0] >> 1} : colour;
-
-    // ---- to the pins, in the order the TinyVGA adapter expects. Leave as it is.
-    //wire [1:0] R = shown[5:4];
-    //wire [1:0] G = shown[3:2];
-    //wire [1:0] B = shown[1:0];
-
-    //assign uo_out  = {hsync, B[0], G[0], R[0], vsync, B[1], G[1], R[1]};
     assign uo_out  = {hsync, colour, colour, colour, vsync, colour, colour, colour};
     assign uio_out = 8'h00;
     assign uio_oe  = 8'h00;
