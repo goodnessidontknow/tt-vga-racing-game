@@ -40,7 +40,7 @@ module tt_um_goodnessidontknow_vga_racing_game (
     localparam [9:0] GROUND_Y  = 10'd400;
     localparam [9:0] CAR_W     = 10'd24;
     localparam [9:0] CAR_H     = 10'd40;
-    localparam [9:0] CAR_X    = 10'd168;  // the part you can drive on
+    localparam [9:0] CAR_X    = 10'd160;  // the part you can drive on
     localparam [9:0] TRAFFIC_W = 10'd32;   // keep to 48 or less, or it overhangs the kerb, ALSO KEEP AT A POWER OF 2
     localparam [9:0] TRAFFIC_H = 10'd32;
 
@@ -96,7 +96,10 @@ module tt_um_goodnessidontknow_vga_racing_game (
     reg [9:0] score;               // frames survived this run, up to 1023
     reg [5:0] crash_timer;         // frames of flash left after a crash, 0 when driving
     reg [7:0] random;             // shifts every clock, so its value looks random
-    reg [9:0] jump_speed;
+    reg [3:0] run;
+
+    localparam signed [5:0] VELOCITY = 6'sd20;
+    reg signed [5:0] jump_speed;
     reg jumping;
 
     // The level goes up by one every 64 frames, and each level is one pixel faster.
@@ -108,18 +111,13 @@ module tt_um_goodnessidontknow_vga_racing_game (
     wire [9:0] random_x1 = {3'b101, random[7:1]};
 
     // A crash is the car's rectangle overlapping a vehicle's rectangle.
-    wire hit0 = (traffic0_x > CAR_X - TRAFFIC_W) & (traffic0_x < CAR_X + CAR_W) & (car_y < TRAFFIC0_Y + TRAFFIC_H) & (car_y > TRAFFIC0_Y - CAR_H);
-    wire hit1 = (traffic1_x > CAR_X - TRAFFIC_W) & (traffic1_x < CAR_X + CAR_W) & (car_y < TRAFFIC1_Y + TRAFFIC_H) & (car_y > TRAFFIC1_Y - CAR_H);
+    wire hit0 = (traffic0_x > CAR_X - TRAFFIC_W) & (traffic0_x < CAR_X + CAR_W) & (car_y > TRAFFIC0_Y - CAR_H);// & (car_y < TRAFFIC0_Y + TRAFFIC_H);
+    wire hit1 = (traffic1_x > CAR_X - TRAFFIC_W) & (traffic1_x < CAR_X + CAR_W) & (car_y < TRAFFIC1_Y + TRAFFIC_H);// & (car_y > TRAFFIC1_Y - CAR_H);
     wire crash = hit0 | hit1;
 
-    // How far each vehicle moves this frame. The second is one pixel faster,
-    // so the two do not stay in step.
-    wire [9:0] step0 = {5'd0, speed};
-    wire [9:0] step1 = {5'd0, speed} + 10'd1;
-
     // One subtraction per obstacle, bit 10 is 1 when the step is bigger when the obstacle passes x = 0
-    wire [10:0] next0 = {1'b0, traffic0_x} - {1'b0, step0};
-    wire [10:0] next1 = {1'b0, traffic1_x} - {1'b0, step1};
+    wire [10:0] next0 = {1'b0, traffic0_x} - {6'd0, speed};
+    wire [10:0] next1 = {1'b0, traffic1_x} - {6'd0, speed} - 11'b1;
 
     always @(posedge clk) begin
         vsync_q <= vsync;
@@ -133,26 +131,24 @@ module tt_um_goodnessidontknow_vga_racing_game (
                 crash_timer <= crash_timer - 6'd1;
                 if (crash_timer == 6'd1) begin
                     car_y       <= CAR_Y_START;
-                    traffic0_x <= 10'd640;
-                    traffic1_x <= 10'd360;//random_x1;
+                    traffic0_x <= random_x0;
+                    traffic1_x <= random_x1;
                     score      <= 10'd0;
                     jumping <= 1'b0;
-                    jump_speed <= 10'sd0;
                 end
             end else if (crash) begin
                 crash_timer <= CRASH_FRAMES;
             end else begin
                 if (jump & ~jumping) begin
                     jumping <= 1'b1;
-                    jump_speed <= 10'sd20;
+                    jump_speed <= VELOCITY;
                 end else if (jumping) begin
-                    if (car_y - jump_speed >= CAR_Y_START) begin
+                    if (jump_speed == -VELOCITY) begin
                         car_y <= CAR_Y_START;
-                        jump_speed <= 10'sd0;
                         jumping <= 1'b0;
                     end else begin
-                        car_y <= car_y - jump_speed;
-                        jump_speed <= jump_speed - 10'sd2;
+                        car_y <= car_y - {{4{jump_speed[5]}}, jump_speed};
+                        jump_speed <= jump_speed - 6'sd2;
                     end
                 end
 
@@ -162,6 +158,8 @@ module tt_um_goodnessidontknow_vga_racing_game (
                 else            traffic0_x <= next0[9:0];
                 if (next1[10])  traffic1_x <= random_x1;
                 else            traffic1_x <= next1[9:0];
+
+                run <= run + 4'd1;
 
                 if (score != 10'h3ff) score <= score + 10'd1;
             end
@@ -179,6 +177,36 @@ module tt_um_goodnessidontknow_vga_racing_game (
     // The car, with a window and four wheels.
     wire [9:0] cy = pix_y - car_y;
     wire in_car    = (pix_x >= CAR_X) & (pix_x < (CAR_X + CAR_W)) & (cy < CAR_H);
+    
+    wire stride = run[3] + ~jumping;
+
+    reg [15:0] warrior_row;
+    always @(*) begin
+        case (cy[5:1])
+            5'd0: warrior_row =  {12'b001111110000, 4'b0};
+            5'd1: warrior_row =  {12'b010000001000, 4'b0};
+            5'd2: warrior_row =  {12'b100010000100, 4'b0};
+            5'd3: warrior_row =  {12'b100010010011, 4'b0};
+            5'd4: warrior_row =  {12'b100010110101, 4'b0};
+            5'd5: warrior_row =  {12'b110010001001, 4'b0};
+            5'd6: warrior_row =  {12'b001100010110, 4'b0};
+            5'd7: warrior_row =  {12'b000111111000, 4'b0};
+            5'd8: warrior_row =  {12'b001111110000, 4'b0};
+            5'd9: warrior_row =  {12'b010001111000, 4'b0};
+            5'd10: warrior_row = {12'b010001101000, 4'b0};
+            5'd11: warrior_row = {12'b010011111000, 4'b0};
+            5'd12: warrior_row = {12'b010011111000, 4'b0};
+            5'd13: warrior_row = {12'b010100111000, 4'b0};
+            5'd14: warrior_row = {12'b011000110000, 4'b0};
+            5'd15: warrior_row = stride ? {12'b010111111110, 4'b0} : {12'b010111111000, 4'b0};
+            5'd16: warrior_row = stride ? {12'b011111111110, 4'b0} : {12'b010111111000, 4'b0};
+            5'd17: warrior_row = stride ? {12'b111110001110, 4'b0} : {12'b100111110000, 4'b0};
+            5'd18: warrior_row = stride ? {12'b111000001111, 4'b0} : {12'b011111111000, 4'b0};
+            5'd19: warrior_row = stride ? {12'b011100000000, 4'b0} : {12'b000111100000, 4'b0};
+            default: warrior_row = 16'b0;
+        endcase
+    end
+    wire in_warrior = in_car & warrior_row[~pix_x[4:1]];
 
     // The two vehicles, each with a darker strip six pixels deep along the top.
     wire [9:0] x0 = pix_x - traffic0_x; // TRAFFIC_W is a power of two, the same test can be done with a subtraction
@@ -195,8 +223,8 @@ module tt_um_goodnessidontknow_vga_racing_game (
     // of anything lower down. Move a line to change what covers what.
     reg colour;//[5:0] colour;
     always @(*) begin
-        if (~video_active | in_score | in_car | in_traffic | in_ground) colour = 1'b0;
-        else                     colour = 1'b1;
+        if      (~video_active | in_score | in_warrior | in_traffic | in_ground) colour = 1'b0;
+        else    colour = 1'b1;
     end
 
     assign uo_out  = {hsync, colour, colour, colour, vsync, colour, colour, colour};
